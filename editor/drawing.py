@@ -159,28 +159,86 @@ class DrawingOverlay:
             self.last_y = event.y
     
     def _erase_at(self, x, y):
-        """Erase strokes near the given point"""
+        """Erase strokes near the given point - only removes segments that are hit"""
         if not self.canvas:
             return
         
-        # Find strokes to delete (both canvas and data)
-        strokes_to_delete = []
-        for idx, stroke_data in enumerate(self.strokes_data):
+        # Track if any changes were made
+        changed = False
+        new_strokes = []  # Will contain updated strokes
+        
+        # Process each stroke to remove only segments that are hit
+        for stroke_data in self.strokes_data:
             points = stroke_data.get('points', [])
+            if len(points) < 2:
+                continue
+            
+            # Find which segments should be kept (not hit by eraser)
+            segments_to_keep = []
             for i in range(len(points) - 1):
                 x1, y1 = points[i]
                 x2, y2 = points[i + 1]
                 dist = self._point_to_line_distance(x, y, x1, y1, x2, y2)
-                if dist < self.erase_radius:
-                    strokes_to_delete.append(idx)
-                    break
+                if dist >= self.erase_radius:
+                    # This segment should be kept
+                    segments_to_keep.append(i)
+            
+            if len(segments_to_keep) == len(points) - 1:
+                # No segments were hit, keep the entire stroke
+                new_strokes.append(stroke_data)
+            elif len(segments_to_keep) == 0:
+                # All segments were hit, remove the entire stroke
+                changed = True
+            else:
+                # Some segments were hit, need to split the stroke into continuous parts
+                changed = True
+                
+                # Find continuous ranges of kept segments
+                # Each range represents a continuous part of the stroke
+                if segments_to_keep:
+                    # Sort to ensure order
+                    segments_to_keep.sort()
+                    
+                    # Group consecutive segments
+                    continuous_parts = []
+                    current_part = [segments_to_keep[0]]
+                    
+                    for i in range(1, len(segments_to_keep)):
+                        if segments_to_keep[i] == segments_to_keep[i-1] + 1:
+                            # Consecutive segment, add to current part
+                            current_part.append(segments_to_keep[i])
+                        else:
+                            # Gap found, save current part and start new one
+                            continuous_parts.append(current_part)
+                            current_part = [segments_to_keep[i]]
+                    continuous_parts.append(current_part)
+                    
+                    # Create strokes from each continuous part
+                    for part in continuous_parts:
+                        # Get all point indices for this part
+                        point_indices = set()
+                        for seg_idx in part:
+                            point_indices.add(seg_idx)
+                            point_indices.add(seg_idx + 1)
+                        
+                        # Create ordered points list
+                        ordered_indices = sorted(point_indices)
+                        new_points = [points[i] for i in ordered_indices]
+                        
+                        # If we have at least 2 points, create a new stroke
+                        if len(new_points) >= 2:
+                            new_stroke = {
+                                'points': new_points,
+                                'color': stroke_data.get('color', 'yellow'),
+                                'width': stroke_data.get('width', 4)
+                            }
+                            new_strokes.append(new_stroke)
         
-        # Delete from data (reverse order to maintain indices)
-        for idx in reversed(strokes_to_delete):
-            self.strokes_data.pop(idx)
-        
-        # Redraw all strokes
-        self._redraw_all_strokes()
+        # Update strokes data if changes were made
+        if changed:
+            self.strokes_data = new_strokes
+            # Redraw all strokes
+            self._redraw_all_strokes()
     
     def _point_to_line_distance(self, px, py, x1, y1, x2, y2):
         """Calculate distance from point to line segment"""
